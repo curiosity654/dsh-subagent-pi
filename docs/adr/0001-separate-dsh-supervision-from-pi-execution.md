@@ -1,0 +1,7 @@
+# Separate DSH supervision from Pi execution authority
+
+The first release uses DeepSeek Harness's official one-shot subagent lifecycle for admission, job ownership, cancellation, and result collection, while Pi remains the native execution authority for tools, extensions, skills, MCP, authentication, approvals, history, and compaction. A Pi Child Run receives a standalone prompt and the DSH Supervisor's Workspace, but does not inherit the supervisor's conversation or DSH execution policies; this preserves Pi-native behavior without implying an enforcement bridge that does not exist.
+
+The run remains sessionless from DSH's perspective: foreground work is visible as a tool result and background work as a Job, without a child Session, Subagent Catalog row, mirrored transcript, or trajectory. DSH performs its own lineage depth admission before startup, while model and Thinking provenance is recorded through redacted Audit Diagnostics. Only visible assistant text crosses the result boundary; Pi reasoning and tool events remain native to Pi.
+
+Each Pi Child Run uses Pi's full print-mode service and extension startup path with an in-memory session manager. This preserves the behavior of loaded Pi resources without creating resumable history or simulating an interactive UI. MCP, permission gates, and sandboxing are present only when loaded Pi extensions actually provide them. The model is resolved once from request `agentOptions` and Pi-native fallbacks; Thinking is resolved from the plugin override and Pi-native settings/default normalization.
