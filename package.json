@@ -2,6 +2,7 @@
   "name": "dsh-subagent-pi",
   "version": "0.2.0",
   "description": "Session-backed one-shot Pi SubagentProvider for DeepSeek Harness",
+  "license": "MIT",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

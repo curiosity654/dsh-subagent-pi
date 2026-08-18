@@ -25,16 +25,40 @@ The terminal outcome and available assistant output returned from a Pi Child Run
 _Avoid_: Child transcript, continued conversation
 
 **Delegation Surface**:
-The standard DSH surface through which a Pi Child Run is observed: a tool result for foreground work or a Job for background work. A Pi Child Run does not create a DSH child Session or Subagent Catalog entry in v1.
-_Avoid_: Pi Session row, mirrored child transcript, Pi trajectory
+The standard DSH surfaces through which a Pi Child Run is observed. Version 0.1 exposed only a foreground tool result or background Job; version 0.2 adds the official child Session and Subagent Catalog without replacing either result path.
+_Avoid_: Custom Pi UI, private result channel, Pi trajectory
+
+**Projection Agent**:
+A DSH Agent that shares a Session-backed Pi child's identity and exposes its official registry status while Pi remains the Execution Authority. It projects observation and forwards cancellation but never runs a DSH model loop or supplies execution policy.
+_Avoid_: Pi Agent, mirror Agent, second execution Agent
+
+**Session Projection**:
+The official DSH Session log that records the subset of Pi Child Run events with exact DSH semantics. It is durable observation state and never Pi conversation state or execution input.
+_Avoid_: Mirrored Pi history, execution checkpoint, approximate transcript
+
+**Published Pi Child**:
+A Pi Child Run whose native setup has succeeded and whose same-identity DSH Session and Projection Agent have been announced before the first Pi prompt. Before this boundary, failure rolls back without exposing a child identity.
+_Avoid_: Starting run, reserved Session, Catalog placeholder
+
+**Child Session Identity**:
+The stable DSH identifier shared by a Published Pi Child's Session, Projection Agent, and Delegation Result handle. It is distinct from DSH lifecycle, background Job, and Pi-native runtime identities.
+_Avoid_: Run id, Job id, Pi session id
+
+**Projection Failure**:
+An infrastructure failure that prevents a Published Pi Child from producing an exact durable Session Projection. It does not redefine or control the Pi execution outcome, but the delegation cannot be reported as successful.
+_Avoid_: Pi error, transcript warning, successful degradation
+
+**Cancellation Provenance**:
+The first durable DSH cause that requests termination of a Pi Child Run. Later cancellation requests may help quiesce the run but never replace that recorded cause.
+_Avoid_: Last cancellation, generic abort flag, Pi stop reason
 
 **Depth Admission**:
 The DSH lineage check performed before Pi starts by resolving the requested child depth against `maxDepth`. It limits which DSH Supervisor may launch the run; it does not transfer a recursive budget into Pi.
 _Avoid_: Pi recursion limit, provider-managed depth
 
 **Audit Diagnostics**:
-Redacted structured records of run identity, Workspace, resolved model and Thinking, and their resolution sources. They are the v1 audit surface for data that DSH lifecycle events and the Subagent Catalog do not carry.
-_Avoid_: Lifecycle metadata, model badge, reasoning transcript
+Redacted operational records of child and parent identity, Workspace, resolved selection, projection health, terminal outcome, and cleanup. They never duplicate the contentful Session Projection or claim lifecycle, Job, or Pi-native identities.
+_Avoid_: Transcript copy, tool trace, lifecycle metadata
 
 **Workspace Trust**:
 Pi's persisted trust decision for the exact Workspace. A Pi Child Run follows an existing native decision and otherwise runs untrusted; only the separate `pi_trust_project` tool may request user-approved persistence of trust.
@@ -59,6 +83,14 @@ _Avoid_: Result settlement, lifecycle end event, best-effort disposal
 **Plugin Configuration**:
 The standard DSH settings namespace containing only an optional fixed provider/model pair, an optional Thinking override, and the positive `maxConcurrentRuns` limit. It is not a per-delegation model catalog.
 _Avoid_: Separate config file, browser model selector, provider fallback layer
+
+**Compatibility Baseline**:
+The exact DSH, Pi, and Node runtime contract against which a release is designed and verified. It distinguishes a supported launcher environment from merely installed package versions.
+_Avoid_: Latest versions, install success, dependency pins
+
+**Session Parity Gate**:
+The evidence chain for Session-backed parity: Pi event fixtures, official DSH Session and persistence contracts, provider and v1 regressions, and an authenticated supported-Node UI and restart smoke. No single automated or visual check substitutes for the whole chain.
+_Avoid_: Unit-test completion, build success, UI screenshot
 
 **Live Smoke Gate**:
 The local rc.7 verification performed after automated tests and linked-bundle preflight: foreground completion, background completion and cancellation, approved Workspace trust taking effect on the next run, and clean plugin unload.

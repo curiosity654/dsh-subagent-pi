@@ -6,7 +6,7 @@ Make Pi a first-class DeepSeek Harness subagent provider with the same official,
 
 The roadmap follows official DSH contracts and UI surfaces. It does not introduce a parallel subagent protocol, custom visualization, or a second execution-policy layer.
 
-## Current baseline — 0.1
+## Historical foundation — 0.1
 
 The first release establishes the native one-shot provider boundary:
 
@@ -16,11 +16,11 @@ The first release establishes the native one-shot provider boundary:
 - `pi_trust_project` is the only approval-gated path that persists Workspace trust;
 - Pi remains responsible for its native models, tools, extensions, skills, authentication, and execution behavior.
 
-The current product boundary is Sessionless: DSH receives lifecycle events and tool/Job results, but the Pi run is not rendered as a child Session in the official Subagent UI.
+The version 0.1 product boundary was Sessionless: DSH received lifecycle events and tool/Job results, but the Pi run was not rendered as a child Session in the official Subagent UI.
 
-## Committed next — 0.2: Session-backed one-shot parity
+## Current release — 0.2: Session-backed one-shot parity
 
-The next release makes every Pi one-shot run a real, durable DSH child Session that the existing DSH UI can render and navigate.
+Version 0.2 makes every Pi one-shot run a real, durable DSH child Session that the existing DSH UI can render and navigate.
 
 ### User-visible outcome
 
@@ -34,7 +34,7 @@ The next release makes every Pi one-shot run a real, durable DSH child Session t
 - Create a child Session with official `origin`, `parentSession`, Workspace, and delegation-depth lineage.
 - Append the official one-shot `subagent/descriptor` for provider `pi`.
 - Project Pi user, assistant, reasoning, tool, usage, and terminal events into valid DSH Session events where an official lossless mapping exists.
-- Persist enough Session state for the official catalog and transcript to remain available after completion and, when host persistence is configured, after restart.
+- Require official host Session persistence and persist enough state for the catalog and transcript to remain available after completion and restart.
 - Keep lifecycle identity, Job identity, child Session identity, and cleanup consistent.
 - Use the existing DSH client UI without adding Pi-specific catalog rows, badges, transcript components, or model selectors.
 
@@ -48,7 +48,7 @@ The DSH Session is an observation and navigation projection. It must not become 
 - Catalog hierarchy and statistics agree with the persisted child log.
 - The existing 0.1 foreground, background, trust, and Pi-native execution contracts remain intact.
 
-## Planned after 0.2 — 0.3: Continuable Session parity
+## Planned next — 0.3: Continuable Session parity
 
 After the one-shot Session projection is proven, add the official continuable-subagent lifecycle rather than creating a Pi-specific continuation channel.
 

@@ -1,0 +1,11 @@
+# Separate Projection Failure from the Pi outcome
+
+After a child is published, a Session Projection or persistence failure does not abort or otherwise steer Pi, because observation is not execution authority; Pi is allowed to reach native quiescence, but the public subagent result rejects as an infrastructure failure rather than returning success or fabricating a Pi stop reason. On every normal path the provider closes the open step and turn, explicitly flushes persistence, marks the Projection Agent idle, and only then settles the result; disposal subsequently detaches the Agent and Session, quiesces Pi, and releases capacity.
+
+Cancellation Provenance is first-cause-wins. DSH Agent cancellation preserves its official cause, request cancellation records `parent`, early disposal records `disposed`, plugin shutdown and an otherwise unexplained Pi-native abort use stable `hook` reasons, and later signals cannot overwrite the durable cause; native stop, length, and error remain completed, max-tokens, and structured error outcomes.
+
+If the process crashes with an open one-shot turn, restart relies on official DSH Session repair to close it as `interrupted` and leaves the child inactive. The plugin never replays the Pi prompt, because the original run may already have produced irreversible external effects.
+
+Audit Diagnostics retain paired `start` and `end` records, with `start` emitted only after publication and `end` after result and cleanup converge, plus at most one content-free `projection-failure` record for the first failure. Diagnostics use child and parent Session identities, aggregate unsupported Pi-only categories, and never copy transcript content or invent unavailable lifecycle and Job identities.
+
+The first Projection Failure freezes ordinary Pi-event projection but permits one bounded terminal-recovery attempt against the last committed valid Session state: close an open step, close the turn with a structured `PROJECTION_FAILURE`, and flush. A second append or flush failure stops recovery and leaves the valid prefix for official restart repair; either outcome still rejects the public result as infrastructure failure and never rewrites the independent Pi outcome.
