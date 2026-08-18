@@ -4,15 +4,14 @@ import {
   createAgentSessionFromServices,
   createAgentSessionServices,
   type AgentSession,
-  type AgentSessionEvent,
 } from "@earendil-works/pi-coding-agent";
 
-import type { ContentBlock } from "@deepseek-ai/dsh-llm";
 import { clampThinkingLevel, getSupportedThinkingLevels, type Api, type Model } from "@earendil-works/pi-ai";
 
 import type { DefaultModel, ThinkingLevel } from "./config.js";
 import type { ModelSelectionSource, ThinkingSelectionSource } from "./diagnostics.js";
-import type { PiSession, PiSessionEvent, PiSessionFactory, PiSessionStartInput, PiStopReason } from "./pi-session.js";
+import { createPiNormalizer } from "./pi-normalizer.js";
+import type { PiRunEvent, PiSession, PiSessionFactory, PiSessionStartInput } from "./pi-session.js";
 
 export class SdkPiSessionFactory implements PiSessionFactory {
   constructor(private readonly defaultAgentDir: string) {}
@@ -76,6 +75,7 @@ class SdkPiSession implements PiSession {
   readonly thinkingSource: ThinkingSelectionSource;
   readonly thinkingClamped: boolean;
   readonly availableThinkingLevels: readonly ThinkingLevel[];
+  private readonly normalizer = createPiNormalizer();
 
   constructor(
     private readonly session: AgentSession,
@@ -98,8 +98,10 @@ class SdkPiSession implements PiSession {
     return this.session.isIdle;
   }
 
-  subscribe(listener: (event: PiSessionEvent) => void): () => void {
-    return this.session.subscribe(event => emitPiEvent(listener, event));
+  subscribe(listener: (event: PiRunEvent) => void): () => void {
+    return this.session.subscribe(event => {
+      for (const normalized of this.normalizer.normalize(event)) listener(normalized);
+    });
   }
 
   prompt(prompt: string): Promise<void> {
@@ -178,72 +180,4 @@ function resolveThinking(
   }
   const level = clampThinkingLevel(model, desired) as ThinkingLevel;
   return { level, source, clamped: level !== desired };
-}
-
-function emitPiEvent(listener: (event: PiSessionEvent) => void, event: AgentSessionEvent): void {
-  if (event.type === "message_update") {
-    const update = event.assistantMessageEvent as unknown as Record<string, unknown>;
-    if (update.type === "text_delta" && typeof update.delta === "string") {
-      listener({ type: "text-delta", text: update.delta });
-    }
-    if (update.type === "done" || update.type === "error") {
-      const message = (update.message ?? update.error) as { content?: unknown; stopReason?: unknown } | undefined;
-      if (message !== undefined) {
-        const content = visibleContent(message.content);
-        if (content.length > 0) listener({ type: "assistant-message", content });
-        const reason = toPiStopReason(message.stopReason ?? update.reason);
-        if (reason !== undefined) listener({ type: "terminal", reason });
-      }
-    }
-    return;
-  }
-  if (event.type === "message_end" && event.message.role === "assistant") {
-    const message = event.message as unknown as { content?: unknown; stopReason?: unknown };
-    const content = visibleContent(message.content);
-    if (content.length > 0) listener({ type: "assistant-message", content });
-    const reason = toPiStopReason(message.stopReason);
-    if (reason !== undefined) listener({ type: "terminal", reason });
-    return;
-  }
-  if (event.type === "turn_end" && event.message.role === "assistant") {
-    const message = event.message as unknown as { content?: unknown; stopReason?: unknown };
-    const content = visibleContent(message.content);
-    if (content.length > 0) listener({ type: "assistant-message", content });
-    const reason = toPiStopReason(message.stopReason);
-    if (reason !== undefined) listener({ type: "terminal", reason });
-    return;
-  }
-  if (event.type === "agent_end") {
-    const assistant = [...event.messages].reverse().find(message => message.role === "assistant") as unknown as { content?: unknown; stopReason?: unknown } | undefined;
-    if (assistant !== undefined) {
-      const content = visibleContent(assistant.content);
-      if (content.length > 0) listener({ type: "assistant-message", content });
-      const reason = toPiStopReason(assistant.stopReason);
-      if (reason !== undefined) listener({ type: "terminal", reason });
-    }
-  }
-}
-
-function visibleContent(value: unknown): ContentBlock[] {
-  if (!Array.isArray(value)) return [];
-  return value.filter(block => {
-    if (typeof block !== "object" || block === null) return false;
-    const candidate = block as { type?: unknown; text?: unknown };
-    return candidate.type === "text" && typeof candidate.text === "string";
-  }) as ContentBlock[];
-}
-
-function toPiStopReason(value: unknown): PiStopReason | undefined {
-  switch (value) {
-    case "stop":
-    case "length":
-    case "aborted":
-    case "error":
-    case "pending":
-    case "toolUse":
-    case "deferred":
-      return value;
-    default:
-      return undefined;
-  }
 }

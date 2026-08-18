@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import type { ContentBlock } from "@deepseek-ai/dsh-llm";
+import type { AgentCancelCause } from "@deepseek-ai/dsh-agent";
 import type {
   ResolvedSubagentStartRequest,
   SubagentCapabilities,
@@ -13,7 +14,8 @@ import type { SessionId } from "@deepseek-ai/dsh-session";
 
 import type { PluginConfig } from "./config.js";
 import type { ModelSelectionSource, PiDiagnosticSink, PiRunDiagnostic, ThinkingSelectionSource } from "./diagnostics.js";
-import type { PiSession, PiSessionFactory, PiSessionStartInput, PiStopReason } from "./pi-session.js";
+import type { PiRunEvent, PiSession, PiSessionFactory, PiSessionStartInput, PiStopReason } from "./pi-session.js";
+import type { ProjectionFailure, SessionProjectionFactory, SessionProjectionHandle } from "./session-projection.js";
 import { canonicalWorkspace, textPrompt } from "./workspace.js";
 
 const capabilities: SubagentCapabilities = {
@@ -23,12 +25,15 @@ const capabilities: SubagentCapabilities = {
   persona: false,
 };
 
-interface ProviderOptions {
+export interface ProviderOptions {
   readonly factory: PiSessionFactory;
   readonly config: PluginConfig | (() => PluginConfig);
   readonly agentDir?: string;
   readonly resolveTrust?: (workspace: string) => boolean;
   readonly onDiagnostic?: PiDiagnosticSink;
+  readonly projection?: SessionProjectionFactory;
+  /** Activation supplies this guard; direct test seams may omit projection. */
+  readonly requireProjection?: boolean;
 }
 
 export interface PiProvider extends SubagentProvider {
@@ -66,10 +71,12 @@ class OutputCollector {
   private terminal?: PiStopReason;
   private infrastructureError?: unknown;
 
-  push(event: { type: "text-delta"; text: string } | { type: "assistant-message"; content: ContentBlock[] } | { type: "terminal"; reason: PiStopReason }): void {
+  push(event: PiRunEvent): void {
     if (event.type === "text-delta" && event.text.length > 0) this.deltas.push(event.text);
     if (event.type === "assistant-message") {
-      const visible = event.content.filter(block => block.type === "text" && typeof block.text === "string");
+      const visible = event.content.filter((block): block is ContentBlock => typeof block === "object"
+        && block !== null && (block as { type?: unknown }).type === "text"
+        && typeof (block as { text?: unknown }).text === "string") as ContentBlock[];
       if (visible.length > 0) this.lastAssistant = visible;
     }
     if (event.type === "terminal") this.terminal = event.reason;
@@ -134,6 +141,7 @@ export function createPiProvider(options: ProviderOptions): PiProvider {
   const agentDir = options.agentDir ?? "";
   const activeDisposers = new Set<() => Promise<void>>();
   let closed = false;
+  let shuttingDown = false;
   let starting = 0;
   let startingDrain: Promise<void> | undefined;
   let resolveStartingDrain: (() => void) | undefined;
@@ -151,6 +159,7 @@ export function createPiProvider(options: ProviderOptions): PiProvider {
   const shutdown = (): Promise<void> => {
     if (shutdownPromise !== undefined) return shutdownPromise;
     closed = true;
+    shuttingDown = true;
     shutdownPromise = (async () => {
       await waitForStarting();
       const settled = await Promise.allSettled([...activeDisposers].map(dispose => dispose()));
@@ -166,13 +175,21 @@ export function createPiProvider(options: ProviderOptions): PiProvider {
     inheritsParentContext: false,
     async start(request): Promise<SubagentRun> {
       if (closed) throw new Error("Pi provider is unloading");
+      if (options.requireProjection === true && options.projection === undefined) {
+        throw new Error("Pi provider requires a Session-backed projection");
+      }
       const prompt = textPrompt(request.prompt as never);
       if (request.outputSchema !== undefined) throw new Error("Pi provider does not support outputSchema in V1");
       if (request.toolFilter !== undefined) throw new Error("Pi provider does not support toolFilter in V1");
       if (request.persona !== undefined) throw new Error("Pi provider does not support persona in V1");
       const config = getConfig();
       const selection = explicitSelection(request, config);
-      resolveChildDepth(request.parent, request.maxDepth);
+      const childDepth = resolveChildDepth(request.parent, request.maxDepth);
+      const descriptorLabel = request.label ?? (
+        typeof (request.descriptor as { label?: unknown } | undefined)?.label === "string"
+          ? (request.descriptor as { label: string }).label
+          : undefined
+      );
       const workspace = await canonicalWorkspace(request.parent.session.header.cwd);
       if (closed) throw new Error("Pi provider is unloading");
       const trusted = options.resolveTrust?.(workspace) ?? false;
@@ -194,15 +211,18 @@ export function createPiProvider(options: ProviderOptions): PiProvider {
         }
       };
       let session: PiSession | undefined;
+      let projection: SessionProjectionHandle | undefined;
       let unsubscribe: () => void = () => {};
       let disposed = false;
       let abortRequested = request.signal.aborted;
       let resultSettled = false;
       let cleanup: Exclude<PiRunDiagnostic["cleanup"], undefined> = "pending";
       let diagnosticEnded = false;
+      let projectionFailureEmitted = false;
       let removeAbortListener: () => void = () => {};
       const collector = new OutputCollector();
-      const runId = randomUUID() as SessionId;
+      const childSessionId = randomUUID() as SessionId;
+      const parentSessionId = String(request.parent.session.id ?? request.parent.id);
 
       const emitDiagnostic = (diagnostic: PiRunDiagnostic): void => {
         try {
@@ -218,8 +238,8 @@ export function createPiProvider(options: ProviderOptions): PiProvider {
         const stopReason = collector.stopReason();
         emitDiagnostic({
           event: "end",
-          runId,
-          parentId: String(request.parent.id),
+          childSessionId: String(projection?.id ?? childSessionId),
+          parentSessionId,
           workspace,
           trusted,
           ...(session.model === undefined ? {} : { model: session.model }),
@@ -230,6 +250,25 @@ export function createPiProvider(options: ProviderOptions): PiProvider {
           ...(stopReason === undefined ? {} : { stopReason }),
           durationMs: Date.now() - startedAt,
           cleanup,
+          ...(projection === undefined ? {} : { unsupportedCounts: projection.diagnostics.unsupportedCounts }),
+        });
+      };
+
+      const emitProjectionFailure = (failure: ProjectionFailure): void => {
+        if (projectionFailureEmitted) return;
+        projectionFailureEmitted = true;
+        emitDiagnostic({
+          event: "projection-failure",
+          childSessionId: String(projection?.id ?? childSessionId),
+          parentSessionId,
+          workspace,
+          trusted,
+          modelSource: selection.source,
+          thinkingSource: config.thinking === undefined ? "default-medium" : "plugin-config",
+          phase: failure.phase,
+          ...(failure.eventCategory === undefined ? {} : { nativeEventCategory: failure.eventCategory }),
+          lastSuccessfulSeq: failure.lastSuccessfulSeq,
+          ...(projection === undefined ? {} : { unsupportedCounts: projection.diagnostics.unsupportedCounts }),
         });
       };
 
@@ -238,7 +277,12 @@ export function createPiProvider(options: ProviderOptions): PiProvider {
       const dispose = async (): Promise<void> => {
         if (disposed) return;
         disposed = true;
-        if (!resultSettled) abortRequested = true;
+        if (!resultSettled) {
+          abortRequested = true;
+          projection?.cancel(shuttingDown
+            ? { kind: "hook", reason: "plugin-shutdown" }
+            : { kind: "disposed" });
+        }
         let cleanupError: unknown;
         try {
           removeAbortListener();
@@ -256,6 +300,19 @@ export function createPiProvider(options: ProviderOptions): PiProvider {
               unsubscribe();
             } catch (error) {
               cleanupError ??= error;
+            }
+            if (projection !== undefined) {
+              try {
+                const finalized = await projection.finalize(abortRequested ? "aborted" : (collector.stopReason() ?? "aborted"));
+                if (finalized.projectionFailure !== undefined) cleanupError ??= finalized.projectionFailure.error;
+              } catch (error) {
+                cleanupError ??= error;
+              }
+              try {
+                await projection.dispose();
+              } catch (error) {
+                cleanupError ??= error;
+              }
             }
             try {
               session.dispose();
@@ -283,11 +340,34 @@ export function createPiProvider(options: ProviderOptions): PiProvider {
         session = await options.factory.start(sessionInput);
         if (closed) throw new Error("Pi provider is unloading");
         if (request.signal.aborted) throw new DOMException("The operation was aborted", "AbortError");
-        unsubscribe = session.subscribe(event => collector.push(event));
+        const abortSession = (): void => {
+          abortRequested = true;
+          void session?.abort().catch(error => collector.fail(error));
+        };
+        projection = options.projection === undefined
+          ? undefined
+          : await options.projection.prepare({
+            parent: request.parent,
+            workspace,
+            delegationDepth: childDepth,
+            provider: "pi",
+            ...(descriptorLabel === undefined ? {} : { label: descriptorLabel }),
+            ...(session.model === undefined ? {} : { model: session.model }),
+            childSessionId: String(childSessionId),
+            onProjectionFailure: emitProjectionFailure,
+            onCancel: abortSession,
+          });
+        if (closed) throw new Error("Pi provider is unloading");
+        if (request.signal.aborted) throw new DOMException("The operation was aborted", "AbortError");
+        projection?.publish(prompt);
+        unsubscribe = session.subscribe(event => {
+          collector.push(event);
+          projection?.project(event);
+        });
         emitDiagnostic({
           event: "start",
-          runId,
-          parentId: String(request.parent.id),
+          childSessionId: String(projection?.id ?? childSessionId),
+          parentSessionId,
           workspace,
           trusted,
           ...(session.model === undefined ? {} : { model: session.model }),
@@ -297,8 +377,8 @@ export function createPiProvider(options: ProviderOptions): PiProvider {
           ...(session.thinkingClamped === undefined ? {} : { thinkingClamped: session.thinkingClamped }),
         });
         const abort = () => {
-          abortRequested = true;
-          void session?.abort().catch(error => collector.fail(error));
+          projection?.cancel({ kind: "parent" });
+          abortSession();
         };
         request.signal.addEventListener("abort", abort, { once: true });
         removeAbortListener = () => {
@@ -313,13 +393,23 @@ export function createPiProvider(options: ProviderOptions): PiProvider {
         const result = promptPromise.then(async () => {
           try {
             await session?.waitForIdle();
+            if (projection !== undefined) {
+              const finalized = await projection.finalize(abortRequested ? "aborted" : (collector.stopReason() ?? "error"));
+              if (finalized.projectionFailure !== undefined) {
+                emitProjectionFailure(finalized.projectionFailure);
+                throw finalized.projectionFailure.error;
+              }
+            }
+            const value = collector.result(abortRequested);
+            resultSettled = true;
+            maybeEmitEnd();
+            return value;
           } catch (error) {
             collector.fail(error);
+            resultSettled = true;
+            maybeEmitEnd();
+            throw error;
           }
-          const value = collector.result(abortRequested);
-          resultSettled = true;
-          maybeEmitEnd();
-          return value;
         });
         result.finally(() => removeAbortListener()).catch(() => undefined);
         const runDispose = async (): Promise<void> => {
@@ -331,7 +421,7 @@ export function createPiProvider(options: ProviderOptions): PiProvider {
         };
         activeDisposers.add(runDispose);
         finishStarting();
-        return { id: runId, localAgent: undefined, result, dispose: runDispose };
+        return { id: projection?.id ?? childSessionId, localAgent: projection?.localAgent, result, dispose: runDispose };
       } catch (error) {
         collector.fail(error);
         try {

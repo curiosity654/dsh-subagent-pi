@@ -7,22 +7,27 @@ import { installSettingsSection, settingsNamespace } from "@deepseek-ai/dsh-sett
 import { Config, normalizeConfig, type PluginConfig } from "./config.js";
 import { createProjectTrustResolver, SdkPiSessionFactory } from "./sdk-factory.js";
 import { createPiProvider } from "./provider.js";
+import { createSessionProjectionFactory, createSessionProjectionHost } from "./session-projection.js";
 import { trustProject } from "./trust.js";
 
 export { Config, normalizeConfig } from "./config.js";
 export { createPiProvider } from "./provider.js";
 export { SdkPiSessionFactory, createProjectTrustResolver } from "./sdk-factory.js";
+export { createSessionProjectionFactory, createSessionProjectionHost, SessionProjector } from "./session-projection.js";
+export { createPiNormalizer, normalizePiEvent, PiEventNormalizer } from "./pi-normalizer.js";
 export { canonicalWorkspace } from "./workspace.js";
 export { trustProject } from "./trust.js";
 export type { PluginConfig } from "./config.js";
+export type { PiRunEvent, PiSession, PiSessionEvent, PiSessionFactory, PiSessionStartInput, PiStopReason } from "./pi-session.js";
 
 export const name = "dsh-subagent-pi";
-export const inject = ["subagents", "tools"];
+export const inject = ["subagents", "tools", "sessions", "agents", "sessionPersistence", "sessionProjections"];
 
 const SETTINGS_NAMESPACE = settingsNamespace("subagent-pi");
 
 export function apply(ctx: Context, config: PluginConfig): void {
   const normalized = normalizeConfig(config);
+  const projection = createSessionProjectionFactory(createSessionProjectionHost(ctx));
   let currentSource: () => PluginConfig = () => normalized;
   const currentConfig = (): PluginConfig => normalizeConfig(currentSource());
   // Resolve Pi's native agent directory once for the plugin lifetime. Every
@@ -35,6 +40,8 @@ export function apply(ctx: Context, config: PluginConfig): void {
     config: currentConfig,
     agentDir,
     resolveTrust: trust.resolve,
+    projection,
+    requireProjection: true,
     onDiagnostic: diagnostic => {
       ctx.logger.debug("pi-subagent diagnostic: %s", JSON.stringify(diagnostic));
     },

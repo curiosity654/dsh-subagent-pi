@@ -9,9 +9,9 @@ export type ThinkingSelectionSource = "plugin-config" | "pi-settings" | "default
  * private Pi settings are deliberately absent from this public audit shape.
  */
 export interface PiRunDiagnostic {
-  readonly event: "start" | "end";
-  readonly runId: string;
-  readonly parentId: string;
+  readonly event: "start" | "end" | "projection-failure";
+  readonly childSessionId: string;
+  readonly parentSessionId: string;
   readonly workspace: string;
   readonly trusted: boolean;
   readonly model?: DefaultModel;
@@ -22,6 +22,10 @@ export interface PiRunDiagnostic {
   readonly stopReason?: PiStopReason;
   readonly durationMs?: number;
   readonly cleanup?: "pending" | "complete" | "error";
+  readonly phase?: string;
+  readonly nativeEventCategory?: string;
+  readonly lastSuccessfulSeq?: number;
+  readonly unsupportedCounts?: Readonly<Record<string, number>>;
 }
 
 export type PiDiagnosticSink = (diagnostic: PiRunDiagnostic) => void;

@@ -7,6 +7,8 @@ import { createPiProvider } from "../src/provider.js";
 import { Config, normalizeConfig } from "../src/config.js";
 import type { PiSessionFactory } from "../src/pi-session.js";
 import type { PiSession, PiSessionEvent, PiSessionStartInput } from "../src/pi-session.js";
+import { SessionId } from "@deepseek-ai/dsh-session";
+import type { SessionProjectionHandle } from "../src/session-projection.js";
 
 function parentAgent(cwd = "/tmp/pi-parent"): Agent {
   return {
@@ -59,6 +61,18 @@ describe("createPiProvider", () => {
     expect(provider.prepareContinuable).toBeUndefined();
   });
 
+  it("requires the Session-backed projection at the deployed activation boundary", async () => {
+    const factory = { start: vi.fn() } as unknown as PiSessionFactory;
+    const provider = createPiProvider({
+      factory,
+      config: normalizeConfig({}),
+      requireProjection: true,
+    });
+
+    await expect(provider.start(request())).rejects.toThrow("requires a Session-backed projection");
+    expect(factory.start).not.toHaveBeenCalled();
+  });
+
   it("rejects non-text input before Pi startup", async () => {
     const factory = { start: vi.fn() } as unknown as PiSessionFactory;
     const provider = createPiProvider({ factory, config: normalizeConfig({}) });
@@ -103,6 +117,77 @@ describe("createPiProvider", () => {
     await run.dispose();
     expect(session.abortCalls).toBe(0);
     expect(session.disposeCalls).toBe(1);
+  });
+
+  it("publishes and finalizes a Session-backed child before exposing the result", async () => {
+    const session = new ControlledSession();
+    const projectedAgent = { id: SessionId("child"), status: "running" } as never;
+    const projection: SessionProjectionHandle = {
+      id: SessionId("child"),
+      localAgent: projectedAgent,
+      diagnostics: { unsupportedCounts: {}, lastSuccessfulSeq: 3 },
+      published: false,
+      publish: vi.fn(),
+      project: vi.fn(),
+      cancel: vi.fn(),
+      finalize: vi.fn(async () => ({})),
+      dispose: vi.fn(async () => undefined),
+    };
+    const factory: PiSessionFactory = { start: vi.fn(async () => session) };
+    const projectionFactory = { prepare: vi.fn(async () => projection) };
+    const provider = createPiProvider({
+      factory,
+      projection: projectionFactory,
+      config: normalizeConfig({}),
+    });
+
+    const run = await provider.start(request({ parent: parentAgent("/tmp") }));
+    expect(run.id).toBe(SessionId("child"));
+    expect(run.localAgent).toBe(projectedAgent);
+    expect(projectionFactory.prepare).toHaveBeenCalledOnce();
+    expect(projection.publish).toHaveBeenCalledWith("do the bounded task");
+    session.finish("visible answer");
+
+    await expect(run.result).resolves.toMatchObject({ stopReason: "completed" });
+    expect(projection.project).toHaveBeenCalled();
+    expect(projection.finalize).toHaveBeenCalledWith("stop");
+    await run.dispose();
+    expect(projection.dispose).toHaveBeenCalledOnce();
+  });
+
+  it("emits content-free child Session diagnostics only after publication and cleanup", async () => {
+    const session = new ControlledSession();
+    const projection: SessionProjectionHandle = {
+      id: SessionId("diagnostic-child"),
+      localAgent: { id: SessionId("diagnostic-child"), status: "running" } as never,
+      diagnostics: { unsupportedCounts: { image: 1 }, lastSuccessfulSeq: 4 },
+      published: false,
+      publish: vi.fn(),
+      project: vi.fn(),
+      cancel: vi.fn(),
+      finalize: vi.fn(async () => ({})),
+      dispose: vi.fn(async () => undefined),
+    };
+    const diagnostics: unknown[] = [];
+    const provider = createPiProvider({
+      factory: { start: vi.fn(async () => session) },
+      projection: { prepare: vi.fn(async () => projection) },
+      config: normalizeConfig({}),
+      onDiagnostic: value => diagnostics.push(value),
+    });
+    const run = await provider.start(request({ parent: parentAgent("/tmp") }));
+    expect(diagnostics[0]).toMatchObject({ event: "start", childSessionId: "diagnostic-child" });
+    session.finish("answer");
+    await run.result;
+    await run.dispose();
+
+    expect(diagnostics.at(-1)).toMatchObject({
+      event: "end",
+      childSessionId: "diagnostic-child",
+      cleanup: "complete",
+      unsupportedCounts: { image: 1 },
+    });
+    expect(JSON.stringify(diagnostics)).not.toContain("do the bounded task");
   });
 
   it("maps cancellation to an aborted result and waits for idle cleanup", async () => {
