@@ -1,0 +1,6 @@
+# The Issue #1 Pi provider bundle. The plugin registers the native `pi`
+# provider, `pi_subagent`, and `pi_trust_project` when DSH mounts this row.
+- insert:
+    - id: subagent-pi
+      name: dsh-subagent-pi
+      config: {}
